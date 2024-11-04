@@ -1,88 +1,66 @@
-const http = require('http');
-const { program } = require('commander');
 const fs = require('fs').promises;
 const path = require('path');
+
+
+const http = require('http');
+const { program } = require('commander');
 const superagent = require('superagent');
 
-
 program
-    .requiredOption('-h, --host <host>', 'Адреса сервера')
-    .requiredOption('-p, --port <port>', 'Порт сервера')
-    .requiredOption('-c, --cache <cache>', 'Шлях до кешу')
+    .requiredOption('-h, --host <host>', 'Server host address')
+    .requiredOption('-p, --port <port>', 'Server port')
+    .requiredOption('-c, --cache <cachePath>', 'Cache directory path')
     .parse(process.argv);
+const { host, port, cache } = program.opts();
 
-const options = program.opts();
+const sendResponse = (res, statusCode, contentType, message) => {
+    res.writeHead(statusCode, { 'Content-Type': contentType });
+    res.end(message);
+};
+
+const ensureCacheDirectory = async () => {
+    try {
+        await fs.access(cache);
+    } catch {
+        await fs.mkdir(cache, { recursive: true });
+    }
+};
 
 const server = http.createServer(async (req, res) => {
-    const urlParts = req.url.split('/');
-    const httpCode = urlParts[1];
-    const imagePath = path.join(options.cache, `${httpCode}.jpg`);
+    const code = req.url.slice(1);
+    const filePath = path.join(cache, `${code}.jpg`);
 
-    switch (req.method) {
-        case 'GET':
-            try {
-                const image = await fs.readFile(imagePath);
-                res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-                res.end(image);
-            } catch (error) {
-
+    try {
+        switch (req.method) {
+            case 'GET':
+                const image = await fs.readFile(filePath);
+                sendResponse(res, 200, 'image/jpeg', image);
+                break;
+            case 'PUT':
                 try {
-                    const response = await superagent.get(`https://http.cat/${httpCode}`);
-                    const image = response.body;
-
-                    await fs.writeFile(imagePath, image);
-
-                    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-                    res.end(image);
-                } catch (err) {
-
-                    res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    res.end('Not found');
+                    await fs.access(filePath);
+                    sendResponse(res, 200, 'text/plain', 'Image already exists in cache');
+                } catch {
+                    const { body: imageBuffer } = await superagent.get(`https://http.cat/${code}`);
+                    await fs.writeFile(filePath, imageBuffer);
+                    sendResponse(res, 201, 'text/plain', 'Image saved successfully');
                 }
-            }
-            break;
-
-        case 'PUT':
-            try {
-
-                const data = await new Promise((resolve, reject) => {
-                    const chunks = [];
-                    req.on('data', chunk => chunks.push(chunk));
-                    req.on('end', () => resolve(Buffer.concat(chunks)));
-                    req.on('error', reject);
-                });
-
-                if (data.length > 0) {
-
-                    await fs.writeFile(imagePath, data);
-                    res.writeHead(201, { 'Content-Type': 'text/plain' });
-                    res.end('Image saved');
-                } else {
-
-                    const response = await superagent.get(`https://http.cat/${httpCode}`);
-                    const image = response.body;
-
-
-                    await fs.writeFile(imagePath, image);
-
-                    res.writeHead(201, { 'Content-Type': 'image/jpeg' });
-                    res.end(image);
-                }
-            } catch (error) {
-                console.error('Error saving image:', error);
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end('Error saving image');
-            }
-            break;
-        default:
-            res.writeHead(405, { 'Content-Type': 'text/plain' });
-            res.end('Method not allowed');
-            break;
+                break;
+            case 'DELETE':
+                await fs.unlink(filePath);
+                sendResponse(res, 200, 'text/plain', 'Image deleted successfully');
+                break;
+            default:
+                sendResponse(res, 405, 'text/plain', '405 Method Not Allowed');
+        }
+    } catch (error) {
+        console.error('Error:', error.message);
+        sendResponse(res, 404, 'text/plain', '404 Not Found');
     }
 });
 
-
-server.listen(options.port, options.host, () => {
-    console.log(`Server running at http://${options.host}:${options.port}/`);
+ensureCacheDirectory().then(() => {
+    server.listen(port, host, () => {
+        console.log(`http://${host}:${port}`);
+    });
 });
-
