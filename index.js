@@ -33,8 +33,17 @@ const server = http.createServer(async (req, res) => {
     try {
         switch (req.method) {
             case 'GET':
-                const image = await fs.readFile(filePath);
-                sendResponse(res, 200, 'image/jpeg', image);
+                try {
+                    const image = await fs.readFile(filePath);
+                    sendResponse(res, 200, 'image/jpeg', image);
+                } catch {
+                    const response = await superagent.get(`https://http.cat/${code}`);
+                    const image = response.body;
+
+                    await fs.writeFile(filePath, image);
+
+                    sendResponse(res, 200, "image/jpeg", image)
+                }
                 break;
             case 'PUT':
                 try {
